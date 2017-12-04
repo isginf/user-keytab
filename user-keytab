@@ -1,0 +1,263 @@
+#!/usr/bin/perl
+
+# user-keytab - Create user keytab for AD domain users
+#
+# This utility creates a keytab file for an AD user account. The keytab 
+# keys are computed locally with the password of the user. The only
+# information queries from the active directory is the KVNO.
+
+# Usage: user-keytab [--user user] [--domain domain] [--output file] [--help]
+#
+# Options:
+#  -u, --user     Set user to create keytab for (default: walteste)
+#  -d, --domain   Set AD domain (Default: d.ethz.ch)
+#  -o, --output   Set output file (default: walteste.keytab)
+#  -h, --help     Displays this message
+
+# Copyright (c) 2017 Stefan Walter (stefan.walter@inf.ethz.ch)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+use Net::LDAPS;
+use Term::ReadKey;
+use File::Slurp;
+use Digest::HMAC_SHA1 qw(hmac_sha1);
+use Crypt::Rijndael;
+#use Digest::MD4;
+#use Encode qw(from_to);
+
+# PROTOTYPES
+sub gen_aes128_key($$);
+sub gen_aes256_key($$);
+sub gen_keytab($$$);
+sub get_kvno($$$);
+sub rfc2898_derive_bytes($$$$);
+sub write_keytab($$);
+sub write_keytab_entry($$$$$);
+
+# Change this to your domain
+my $domain = 'd.ethz.ch';
+
+my $user = $ENV{USER};
+my $file = "$user.keytab";
+my $help;
+
+GetOptions ('user=s' => \$user, 'domain=s' => \$domain, 'help' => \$help, 'output=s' => \$file);
+if ($help)
+{
+    print "Usage: $0 [--user user] [--domain domain] [--output file] [--help]\n\n";
+    print "Options:\n";
+    print "  -u, --user     Set user to create keytab for (default: $user)\n";
+    print "  -d, --domain   Set AD domain (Default: $domain)\n";
+    print "  -o, --output   Set output file (default: $file)\n";
+    print "  -h, --help     Displays this message\n";
+    exit 0;
+}
+
+print "Password for '$user\@$domain': ";
+ReadMode 'noecho';
+my $pass = ReadLine 0;
+ReadMode 'normal';
+print STDERR "\n";
+chomp $pass;
+
+write_keytab(gen_keytab($user, $pass, $domain), $file);
+
+$domain = uc $domain;
+print "Wrote keytab for '$user\@$domain' to '$file'\n";
+
+exit 0;
+
+# ########################################################################## #
+
+
+sub gen_keytab($$$)
+{
+    my ($samaccountname, $pass, $domain) = @_;
+
+    my $realm = uc $domain;
+    my $salt = $realm . $samaccountname;
+
+    #my $rc4 = gen_rc4_key($pass);
+    my $aes128 = gen_aes128_key($pass, $salt);
+    my $aes256 = gen_aes256_key($pass, $salt);
+
+    my $kvno = get_kvno($user, $pass, $domain);
+
+    my $keys = ();
+    my $ts = time();
+    $keys->{$samaccountname . '@' . $realm}->{$kvno}->{17} = [ $ts , $aes128 ];
+    $keys->{$samaccountname . '@' . $realm}->{$kvno}->{18} = [ $ts , $aes256 ];
+#    $keys->{$samaccountname . '@' . uc($realm)}->{$kvno}->{23} = [ $ts , $rc4 ];
+
+    $keys;
+}
+
+
+sub get_kvno($$$)
+{
+    my ($user, $pass, $domain) = @_;
+
+    my ($short) = split /\./, $domain;
+    my $base = "DC=" . join(",DC=", split /\./, $domain);
+
+    my $ldap = Net::LDAPS->new($domain);
+
+    my $login = $ldap->bind("$short\\$user", password => $pass);
+    print("Authentication as '$user' to '$domain' failed, wrong password\n"), exit(2)
+        if $login->is_error;
+
+    my @search =
+    (
+        base    => $base,
+        scope   => 'sub',
+        filter  => "sAMAccountName=$user",
+        attrs   => [ 'msDS-KeyVersionNumber' ]
+    );
+
+    my $search = $ldap->search(@search);
+    print("Search for '$user' in '$domain' failed\n"), exit(2)
+        if $search->code;
+
+    my ($entry) = $search->entries;
+
+    my $kvno = $entry->get_value('msDS-KeyVersionNumber');
+    print("Cannot determine KVNO for '$user' in '$domain'\n"), exit(2)
+        unless $kvno;
+
+    $kvno;
+}
+
+
+# ########################################################################## #
+
+#sub gen_rc4_key($)
+#{
+#    my ($pass) = @_;
+#
+#    my $md4 = Digest::MD4->new;
+#    from_to($pass, 'UTF-8', 'UTF-16le');
+#    $md4->add($pass);
+#    $md4->digest;
+#}
+
+
+sub gen_aes128_key($$)
+{
+    my ($pass, $salt) = @_;
+
+    my $key = rfc2898_derive_bytes($pass, $salt, 4096, 16);
+    
+    my $cipher = Crypt::Rijndael->new($key, Crypt::Rijndael::MODE_CBC());
+    $cipher->set_iv("\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00");
+    $cipher->encrypt("\x6B\x65\x72\x62\x65\x72\x6F\x73\x7B\x9B\x5B\x2B\x93\x13\x2B\x93");
+}
+
+
+sub gen_aes256_key($$)
+{
+    my ($pass, $salt) = @_;
+
+    my $key = rfc2898_derive_bytes($pass, $salt, 4096, 32);
+    
+    my $cipher = Crypt::Rijndael->new($key, Crypt::Rijndael::MODE_CBC());
+    $cipher->set_iv("\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00");
+    my $part1 = $cipher->encrypt("\x6B\x65\x72\x62\x65\x72\x6F\x73\x7B\x9B\x5B\x2B\x93\x13\x2B\x93\x5C\x9B\xDC\xDA\xD9\x5C\x98\x99\xC4\xCA\xE4\xDE\xE6\xD6\xCA\xE4");
+    my $part2 = $cipher->encrypt($part1);
+
+    $key = substr($part1,0,16) . substr($part2,0,16);
+}
+
+
+sub rfc2898_derive_bytes($$$$)
+{
+    my ($pass, $salt, $iter, $length) = @_;
+
+    sub _F
+    {
+        my ($pass, $salt, $iter, $count) = @_;
+
+        my $r = my $t = hmac_sha1 $salt . pack('N', $$count++), $pass;
+
+        for (my $i = 2; $i <= $iter; $i++) {
+           $r = $r ^ ($t = hmac_sha1 $t, $pass);
+        }
+        
+        $r;
+    }
+
+    my $count = 1;
+    my $res = '';
+    while ($length)
+    {
+        my $block = _F($pass, $salt, $iter, \$count);
+
+        my $l = $length > 20 ? 20 : $length;
+        $length -= $l;
+        $res .= substr($block, 0, $l);
+    }
+
+    $res;
+}
+
+
+# ########################################################################## #
+
+sub write_keytab($$)
+{
+    my ($keys, $file) = @_;
+
+    my $k = pack 'c2', 5, 2;
+
+    foreach my $principal (sort keys %$keys)
+    {
+        my $vno = 0;
+        map { $vno = $_ if $vno < $_ } keys %{$keys->{$principal}};
+        
+        my $entries = $keys->{$principal}->{$vno};
+
+        foreach my $type (sort keys %$entries)
+        {
+            my ($time, $key) = @{$entries->{$type}};
+            $k .= write_keytab_entry($principal, $vno, $type, $time, $key);
+        }
+    }
+    
+    print("Error while writing file '$file'\n"), exit(2)
+        unless write_file($file, { perms => 0600 }, $k);
+}
+
+
+sub write_keytab_entry($$$$$)
+{
+    my ($principal, $vno, $type, $time, $key) = @_;
+
+    my ($tmp, $realm) = split '@', $principal;
+    my @components = split '/', $tmp;
+
+    my $e = pack 'n', 1+$#components;
+    $e .= pack('n', length($realm)) . $realm;
+    map { $e .= pack('n', length($_)) . $_ } @components;
+
+    $e .= pack 'N2 c n', 1, $time, 0, $type;
+    $e .= pack('n', length($key)) . $key;
+    $e .= pack 'N', $vno;
+
+    return pack('N', length($e)) . $e;
+}
+
