@@ -1,9 +1,11 @@
 user-keytab
 ===========
 
-This utility creates a keytab file for an AD user account. The keytab 
-keys are computed locally with the password of the user. The only
-information queried from the active directory is the KVNO.
+This utility creates a keytab file for an Active Directory user account. The
+keytab keys are computed locally with the password of the user. The only
+information queried from the AD server is the KVNO. The system does
+not require a valid kerberos configuration to run this script, only network
+access to the Active Directory.
 
 Usage
 =====
@@ -28,7 +30,7 @@ user-keytab is written in perl. Install perl and the following modules from CPAN
 - Digest::HMAC_SHA1
 - Crypt::Rijndael
 
-On a CentOS/RHEL system you can install everything with the following command:
+On a CentOS/RHEL system with [EPEL](https://fedoraproject.org/wiki/EPEL) enabled you can install everything with the following command:
 
 ```
 yum install -y perl perl-LDAP perl-TermReadKey perl-File-Slurp perl-Digest-HMAC perl-Crypt-Rijndael
