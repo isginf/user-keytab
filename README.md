@@ -36,7 +36,7 @@ On a CentOS/RHEL system with [EPEL](https://fedoraproject.org/wiki/EPEL) enabled
 yum install -y perl perl-LDAP perl-TermReadKey perl-File-Slurp perl-Digest-HMAC perl-Crypt-Rijndael
 ```
 
-On A Debian or Ubuntu system the following command will do the same:
+On a Debian or Ubuntu system the following command will do the same:
 
 ```
 apt install perl libnet-ldap-perl libterm-readkey-perl libfile-slurp-perl libdigest-hmac-perl libcrypt-rijndael-perl
