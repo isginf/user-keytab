@@ -2,11 +2,13 @@
 
 # user-keytab - Create user keytab for AD domain users
 #
-# This utility creates a keytab file for an AD user account. The keytab 
-# keys are computed locally with the password of the user. The only
-# information queries from the active directory is the KVNO.
+# This utility creates a keytab file for an Active Drectory user account.
+# The keytab keys are computed locally with the password of the user. The
+# only information queried from the AD server via LDAP is the KVNO. The
+# system does not require a valid kerberos configuration to run this
+# script, only network access to the Active Directory.
 
-# Usage: user-keytab [--user user] [--domain domain] [--output file] [--help]
+# Usage: user-keytab [-h] [--user user] [--domain domain] [--output file]
 #
 # Options:
 #  -u, --user     Set user to create keytab for (default: walteste)
@@ -41,9 +43,9 @@ use Crypt::Rijndael;
 #use Digest::MD4;
 #use Encode qw(from_to);
 
-# PROTOTYPES
 sub gen_aes128_key($$);
 sub gen_aes256_key($$);
+#sub gen_rc4_key($$);
 sub gen_keytab($$$);
 sub get_kvno($$$);
 sub rfc2898_derive_bytes($$$$);
@@ -60,7 +62,7 @@ my $help;
 GetOptions ('user=s' => \$user, 'domain=s' => \$domain, 'help' => \$help, 'output=s' => \$file);
 if ($help)
 {
-    print "Usage: $0 [--user user] [--domain domain] [--output file] [--help]\n\n";
+    print "Usage: $0 [-h] [--user user] [--domain domain] [--output file]\n\n";
     print "Options:\n";
     print "  -u, --user     Set user to create keytab for (default: $user)\n";
     print "  -d, --domain   Set AD domain (Default: $domain)\n";
@@ -103,7 +105,7 @@ sub gen_keytab($$$)
     my $ts = time();
     $keys->{$samaccountname . '@' . $realm}->{$kvno}->{17} = [ $ts , $aes128 ];
     $keys->{$samaccountname . '@' . $realm}->{$kvno}->{18} = [ $ts , $aes256 ];
-#    $keys->{$samaccountname . '@' . uc($realm)}->{$kvno}->{23} = [ $ts , $rc4 ];
+    #$keys->{$samaccountname . '@' . uc($realm)}->{$kvno}->{23} = [ $ts , $rc4 ];
 
     $keys;
 }
